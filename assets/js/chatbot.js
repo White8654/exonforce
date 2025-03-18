@@ -1,5 +1,5 @@
 /**
- * Circle Chatbot JavaScript - Gemini API Integration with Context
+ * Circle Chatbot JavaScript - Salesforce AgentForce API Integration with Context
  */
 (function ($) {
   "use strict";
@@ -12,12 +12,100 @@
     const chatbotInput = $("#circle-chatbot-input");
     const chatbotSend = $("#circle-chatbot-send");
 
-    // Gemini API Key - Replace with your actual key
-    const GEMINI_API_KEY = "";
+    // Salesforce AgentForce Configuration
+    const SF_DOMAIN = "https://ex1741067940500--uat2.sandbox.my.salesforce.com";
+    const SF_CLIENT_ID =
+      "3MVG92bg6BUCmlUaDQ0H47UkWZ_lOp1c.Lz4q9HVCv3E7SYA2yHSIBdMF6CWHOi9bUieFRnn8jG9BdyoJJvjA";
+    const SF_CLIENT_SECRET =
+      "57EB48CA2628B23944AF67AF9691896C9CA0D18039A990CF5AAC411C3FA86B4C";
+    const AGENT_ID = "0XxDk000000Gmc5KAC"; // Fill in your AgentForce Agent ID
+
+    // AgentForce session management
+    let accessToken = null;
+    let sessionId = null;
+    let sequenceId = 1;
+
     // Chat context management
-    let conversationHistory = [];
     let isChatOpen = false;
     let isWaitingForResponse = false;
+
+    // Initialize AgentForce session
+    function initializeAgentForce() {
+      // Get access token
+      $.ajax({
+        url: `${SF_DOMAIN}/services/oauth2/token`,
+        type: "POST",
+        contentType: "application/x-www-form-urlencoded",
+        data: {
+          grant_type: "client_credentials",
+          client_id: SF_CLIENT_ID,
+          client_secret: SF_CLIENT_SECRET,
+        },
+        success: function (response) {
+          accessToken = response.access_token;
+          console.log("Access token obtained");
+
+          // Create AgentForce session
+          createAgentForceSession();
+        },
+        error: function (xhr, status, error) {
+          console.error("Authentication Error:", error);
+          addBotMessage(
+            "I'm having trouble connecting to the service. Please try again later."
+          );
+        },
+      });
+    }
+
+    // Create AgentForce session
+    function createAgentForceSession() {
+      // Generate a random UUID for external session key
+      const externalSessionKey = generateUUID();
+
+      $.ajax({
+        url: `https://api.salesforce.com/einstein/ai-agent/v1/agents/${AGENT_ID}/sessions`,
+        type: "POST",
+        contentType: "application/json",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        data: JSON.stringify({
+          externalSessionKey: externalSessionKey,
+          instanceConfig: {
+            endpoint: SF_DOMAIN,
+          },
+          streamingCapabilities: {
+            chunkTypes: ["Text"],
+          },
+          bypassUser: true,
+        }),
+        success: function (response) {
+          sessionId = response.sessionId;
+          console.log("AgentForce session created:", sessionId);
+
+          // Ready to chat
+          sequenceId = 1;
+        },
+        error: function (xhr, status, error) {
+          console.error("Session Creation Error:", error);
+          addBotMessage(
+            "I'm having trouble initializing the chat service. Please try again later."
+          );
+        },
+      });
+    }
+
+    // Generate a UUID
+    function generateUUID() {
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
+        /[xy]/g,
+        function (c) {
+          var r = (Math.random() * 16) | 0,
+            v = c == "x" ? r : (r & 0x3) | 0x8;
+          return v.toString(16);
+        }
+      );
+    }
 
     // Toggle chat box
     chatbotButton.on("click", function () {
@@ -25,6 +113,8 @@
       if (isChatOpen) {
         chatbotBox.css("display", "flex");
         if (chatbotMessages.children().length === 0) {
+          // Initialize session when chat is opened for the first time
+          initializeAgentForce();
           addBotMessage(circleChatbotData.welcomeMessage);
         }
         chatbotInput.focus();
@@ -57,67 +147,84 @@
         isWaitingForResponse = true;
         addTypingIndicator();
 
-        // Add to conversation history
-        conversationHistory.push({ role: "user", parts: [{ text: message }] });
-
-        // Keep context size manageable (last 5 exchanges)
-        if (conversationHistory.length > 10) {
-          conversationHistory = conversationHistory.slice(
-            conversationHistory.length - 10
-          );
+        // If we don't have a session yet, initialize one
+        if (!sessionId) {
+          initializeAgentForce();
+          setTimeout(function () {
+            // Retry sending the message after a delay
+            sendToAgentForce(message);
+          }, 2000);
+        } else {
+          sendToAgentForce(message);
         }
-
-        callGeminiAPI(message);
       }
     }
 
-    function callGeminiAPI(message) {
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
-
-      // Build request with conversation history
-      const requestData = {
-        contents: conversationHistory,
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 1000,
-        },
-      };
+    function sendToAgentForce(message) {
+      if (!sessionId || !accessToken) {
+        removeTypingIndicator();
+        addBotMessage(
+          "I'm still connecting to the service. Please try again in a moment."
+        );
+        isWaitingForResponse = false;
+        return;
+      }
 
       $.ajax({
-        url: apiUrl,
+        url: `https://api.salesforce.com/einstein/ai-agent/v1/sessions/${sessionId}/messages`,
         type: "POST",
         contentType: "application/json",
-        data: JSON.stringify(requestData),
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+        },
+        data: JSON.stringify({
+          message: {
+            sequenceId: sequenceId++,
+            type: "Text",
+            text: message,
+          },
+        }),
         success: function (response) {
           removeTypingIndicator();
 
-          let responseText = "";
-          if (
-            response.candidates &&
-            response.candidates[0] &&
-            response.candidates[0].content &&
-            response.candidates[0].content.parts
-          ) {
-            responseText = response.candidates[0].content.parts[0].text;
+          // Process the response
+          if (response.messages && response.messages.length > 0) {
+            const botMessage =
+              response.messages[0].message ||
+              "I'm sorry, I couldn't process that request.";
+            addBotMessage(botMessage);
 
-            // Add AI response to conversation history
-            conversationHistory.push({
-              role: "model",
-              parts: [{ text: responseText }],
-            });
+            // Handle any results if needed
+            if (
+              response.messages[0].result &&
+              response.messages[0].result.length > 0
+            ) {
+              // Process specific result types here if needed
+              console.log("Result data:", response.messages[0].result);
+            }
           } else {
-            responseText = "Sorry, I couldn't process that request.";
+            addBotMessage(
+              "I received your message but couldn't generate a response."
+            );
           }
 
-          addBotMessage(responseText);
           isWaitingForResponse = false;
         },
         error: function (xhr, status, error) {
           removeTypingIndicator();
-          addBotMessage(
-            "Sorry, I encountered an error. Please try again later."
-          );
           console.error("API Error:", error);
+
+          // Handle token expiration
+          if (xhr.status === 401) {
+            accessToken = null;
+            sessionId = null;
+            addBotMessage("My connection expired. Reconnecting...");
+            initializeAgentForce();
+          } else {
+            addBotMessage("I encountered an error. Please try again later.");
+          }
+
           isWaitingForResponse = false;
         },
       });
