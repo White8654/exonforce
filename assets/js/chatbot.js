@@ -13,7 +13,7 @@
     const chatbotSend = $("#circle-chatbot-send");
 
     // Gemini API Key - Replace with your actual key
-    const GEMINI_API_KEY = "AIzaSyAkkSemOMfquKxBIkoksXdq_aMVvnXc3pw";
+    const GEMINI_API_KEY = "";
     // Chat context management
     let conversationHistory = [];
     let isChatOpen = false;
