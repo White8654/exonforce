@@ -1,5 +1,5 @@
 /**
- * Circle Chatbot JavaScript - Salesforce AgentForce API Integration with Context
+ * Circle Chatbot JavaScript - Salesforce AgentForce API Integration via Apex REST
  */
 (function ($) {
   "use strict";
@@ -12,79 +12,33 @@
     const chatbotInput = $("#circle-chatbot-input");
     const chatbotSend = $("#circle-chatbot-send");
 
-    // Salesforce AgentForce Configuration
-    const SF_DOMAIN = "https://ex1741067940500--uat2.sandbox.my.salesforce.com";
-    const SF_CLIENT_ID =
-      "3MVG92bg6BUCmlUaDQ0H47UkWZ_lOp1c.Lz4q9HVCv3E7SYA2yHSIBdMF6CWHOi9bUieFRnn8jG9BdyoJJvjA";
-    const SF_CLIENT_SECRET =
-      "57EB48CA2628B23944AF67AF9691896C9CA0D18039A990CF5AAC411C3FA86B4C";
-    const AGENT_ID = "0XxDk000000Gmc5KAC"; // Fill in your AgentForce Agent ID
+    // API Configuration
+    const API_BASE_URL =
+      "https://ex1741067940500--agent2.sandbox.my.salesforce-sites.com/services/apexrest/getsession";
 
-    // AgentForce session management
-    let accessToken = null;
+    // Chat session management
     let sessionId = null;
-    let sequenceId = 1;
 
     // Chat context management
     let isChatOpen = false;
     let isWaitingForResponse = false;
 
-    // Initialize AgentForce session
-    function initializeAgentForce() {
-      // Get access token
+    // Initialize session
+    function initializeSession() {
       $.ajax({
-        url: `${SF_DOMAIN}/services/oauth2/token`,
-        type: "POST",
-        contentType: "application/x-www-form-urlencoded",
-        data: {
-          grant_type: "client_credentials",
-          client_id: SF_CLIENT_ID,
-          client_secret: SF_CLIENT_SECRET,
-        },
-        success: function (response) {
-          accessToken = response.access_token;
-          console.log("Access token obtained");
-
-          // Create AgentForce session
-          createAgentForceSession();
-        },
-        error: function (xhr, status, error) {
-          console.error("Authentication Error:", error);
-          addBotMessage(
-            "I'm having trouble connecting to the service. Please try again later."
-          );
-        },
-      });
-    }
-
-    // Create AgentForce session
-    function createAgentForceSession() {
-      // Generate a random UUID for external session key
-      const externalSessionKey = generateUUID();
-
-      $.ajax({
-        url: `https://api.salesforce.com/einstein/ai-agent/v1/agents/${AGENT_ID}/sessions`,
-        type: "POST",
+        url: API_BASE_URL,
+        type: "GET",
         contentType: "application/json",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        data: JSON.stringify({
-          externalSessionKey: externalSessionKey,
-          instanceConfig: {
-            endpoint: SF_DOMAIN,
-          },
-          streamingCapabilities: {
-            chunkTypes: ["Text"],
-          },
-          bypassUser: true,
-        }),
         success: function (response) {
           sessionId = response.sessionId;
-          console.log("AgentForce session created:", sessionId);
+          console.log("Session created:", sessionId);
 
-          // Ready to chat
-          sequenceId = 1;
+          // Display welcome message
+          if (response.messages && response.messages.length > 0) {
+            const welcomeMessage =
+              response.messages[0].message || "Welcome to our chat service!";
+            addBotMessage(welcomeMessage);
+          }
         },
         error: function (xhr, status, error) {
           console.error("Session Creation Error:", error);
@@ -95,18 +49,6 @@
       });
     }
 
-    // Generate a UUID
-    function generateUUID() {
-      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
-        /[xy]/g,
-        function (c) {
-          var r = (Math.random() * 16) | 0,
-            v = c == "x" ? r : (r & 0x3) | 0x8;
-          return v.toString(16);
-        }
-      );
-    }
-
     // Toggle chat box
     chatbotButton.on("click", function () {
       isChatOpen = !isChatOpen;
@@ -114,8 +56,7 @@
         chatbotBox.css("display", "flex");
         if (chatbotMessages.children().length === 0) {
           // Initialize session when chat is opened for the first time
-          initializeAgentForce();
-          addBotMessage(circleChatbotData.welcomeMessage);
+          initializeSession();
         }
         chatbotInput.focus();
       } else {
@@ -125,6 +66,20 @@
 
     // Close chat box
     chatbotClose.on("click", function () {
+      if (sessionId) {
+        // End the session when closing chat
+        $.ajax({
+          url: `${API_BASE_URL}/${sessionId}`,
+          type: "DELETE",
+          success: function () {
+            console.log("Session terminated successfully");
+          },
+          error: function (xhr, status, error) {
+            console.error("Error terminating session:", error);
+          },
+        });
+      }
+
       chatbotBox.hide();
       isChatOpen = false;
     });
@@ -149,19 +104,19 @@
 
         // If we don't have a session yet, initialize one
         if (!sessionId) {
-          initializeAgentForce();
+          initializeSession();
           setTimeout(function () {
             // Retry sending the message after a delay
-            sendToAgentForce(message);
+            sendToAgent(message);
           }, 2000);
         } else {
-          sendToAgentForce(message);
+          sendToAgent(message);
         }
       }
     }
 
-    function sendToAgentForce(message) {
-      if (!sessionId || !accessToken) {
+    function sendToAgent(message) {
+      if (!sessionId) {
         removeTypingIndicator();
         addBotMessage(
           "I'm still connecting to the service. Please try again in a moment."
@@ -171,19 +126,11 @@
       }
 
       $.ajax({
-        url: `https://api.salesforce.com/einstein/ai-agent/v1/sessions/${sessionId}/messages`,
+        url: `${API_BASE_URL}/${sessionId}`,
         type: "POST",
         contentType: "application/json",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Accept: "application/json",
-        },
         data: JSON.stringify({
-          message: {
-            sequenceId: sequenceId++,
-            type: "Text",
-            text: message,
-          },
+          text: message,
         }),
         success: function (response) {
           removeTypingIndicator();
@@ -215,12 +162,11 @@
           removeTypingIndicator();
           console.error("API Error:", error);
 
-          // Handle token expiration
-          if (xhr.status === 401) {
-            accessToken = null;
+          // Handle session expiration
+          if (xhr.status === 401 || xhr.status === 404) {
             sessionId = null;
             addBotMessage("My connection expired. Reconnecting...");
-            initializeAgentForce();
+            initializeSession();
           } else {
             addBotMessage("I encountered an error. Please try again later.");
           }
