@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Circle Chatbot
+ * Plugin Name: Chatbot
  * Description: A simple chatbot with a circular button in the bottom right corner
  * Version: 1.0
  * Author: sohan
@@ -30,10 +30,10 @@ class Circle_Chatbot {
     public function activate() {
         // Set default options
         $default_options = array(
-            'button_color' => '#4285f4',
-            'button_icon' => '💬',
-            'chat_title' => 'How can I help you?',
-            'welcome_message' => 'Hello! How can I assist you today?'
+            'button_color' => '#7D4CFD',
+            'button_icon' => '🤖',
+            'chat_title' => 'AI Assistant',
+            'welcome_message' => 'Hello! I\'m your AI assistant. How can I help you today?'
         );
         
         add_option('circle_chatbot_options', $default_options);
