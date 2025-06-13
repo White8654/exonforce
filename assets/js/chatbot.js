@@ -1,7 +1,3 @@
-/**
- * ExonForce Professional Chatbot - Salesforce AgentForce API Integration
- * Modern implementation with smooth animations
- */
 (function ($) {
   "use strict";
 
@@ -14,6 +10,7 @@
     const chatbotInput = $("#circle-chatbot-input");
     const chatbotSend = $("#circle-chatbot-send");
     const chatbotContainer = $("#circle-chatbot-container");
+    const chatbotInputContainer = $("#circle-chatbot-input-container");
 
     // Replace send button with SVG icon
     chatbotSend.html(
@@ -27,16 +24,20 @@
 
     // API Configuration
     const API_BASE_URL =
-      "https://ex1748335242676.my.salesforce-sites.com/services/apexrest/getsession";
+      "https://ex1748335242676.my.salesforce-sites.com/services/apexrest/agentsupport";
 
-    // Chat session management
+    // --- Chat State Management ---
     let sessionId = null;
-
-    // Chat context management
     let isChatOpen = false;
     let isWaitingForResponse = false;
     let isInitializing = false;
     let hasUserInteracted = false;
+
+    // --- Guided Flow State Management ---
+    let chatConfig = null;
+    let currentInstructionPath = { mainMenuIndex: null, instructionIndex: -1 };
+    let userData = {};
+    let isInGuidedFlow = false;
 
     // Initialize session
     function initializeSession() {
@@ -50,25 +51,22 @@
         type: "GET",
         contentType: "application/json",
         success: function (response) {
+          console.log("Session Creation Response:", response);
           sessionId = response.sessionId;
           console.log("Session created:", sessionId);
 
-          // Hide loading animation with fade effect
           hideLoadingAnimation();
           isInitializing = false;
 
-          // Display welcome message with typing effect
           if (response.messages && response.messages.length > 0) {
             const welcomeMessage =
               response.messages[0].message || "Welcome to our chat service!";
-
-            // Show typing indicator before showing the message
             addTypingIndicator();
-
-            // Simulate typing delay
             setTimeout(() => {
               removeTypingIndicator();
               addBotMessage(welcomeMessage);
+              // Initiate the guided flow
+              initiateConfiguredChat();
             }, 1000);
           }
         },
@@ -83,152 +81,232 @@
       });
     }
 
-    let timeoutID;
+    // --- Guided Flow Logic ---
 
-    function resetUserActivityTimeout() {
-      clearTimeout(timeoutID);
-      timeoutID = setTimeout(function () {
-        if (!isChatOpen) {
-          isChatOpen = true;
-          chatbotButton.addClass("pulse-attention");
-        } else {
-          chatbotButton.removeClass("pulse-attention");
-        }
-
-        if (isChatOpen) {
-          // Button animation
-          chatbotButton.addClass("active");
-
-          // Show chatbox with animation
-          chatbotBox.css("display", "flex").hide().fadeIn(300);
-
-          if (!sessionId) {
-            // Initialize session when chat is opened for the first time
-            initializeSession();
-          }
-
-          // Focus on input after animation completes
-          setTimeout(() => {
-            chatbotInput.focus();
-          }, 400);
-
-          // Mark that user has interacted
-          hasUserInteracted = true;
-        } else {
-          // Button animation
-          chatbotButton.removeClass("active");
-
-          // Hide chatbox with animation
-          chatbotBox.fadeOut(300);
-        }
-      }, 5000);
+    function initiateConfiguredChat() {
+      addTypingIndicator();
+      // Silently send a message to get the JSON configuration
+      $.ajax({
+        url: `${API_BASE_URL}/${sessionId}`,
+        type: "POST",
+        contentType: "application/json",
+        data: JSON.stringify({ text: "initiate chat session" }),
+        success: function (response) {
+          removeTypingIndicator();
+          console.log("Chat Config Received:", response);
+          handleConfigResponse(response);
+        },
+        error: function (xhr, status, error) {
+          removeTypingIndicator();
+          console.error("Error fetching chat config:", error);
+          addBotMessage(
+            "Sorry, I'm having trouble loading our conversation options."
+          );
+        },
+      });
     }
 
-    // Call the function on page load to start tracking
-    resetUserActivityTimeout();
+    function handleConfigResponse(config) {
+      chatConfig = config;
+      userData = {};
+      currentInstructionPath = { mainMenuIndex: null, instructionIndex: -1 };
+      isInGuidedFlow = false;
 
-    // Add event listeners to reset the timer on user activity
-    window.addEventListener("mousemove", resetUserActivityTimeout);
-    window.addEventListener("keydown", resetUserActivityTimeout);
-    window.addEventListener("scroll", resetUserActivityTimeout);
-    window.addEventListener("resize", resetUserActivityTimeout);
+      if (chatConfig && chatConfig.mainMenuItems) {
+        chatConfig.mainMenuItems.sort((a, b) => a.order - b.order);
+        const mainMenuItems = chatConfig.mainMenuItems.map((item) => ({
+          text: item.name,
+          value: item.name,
+        }));
 
-    // Show loading animation
-    function showLoadingAnimation() {
-      // Create loading animation if it doesn't exist
-      if ($("#chatbot-loading").length === 0) {
-        const loadingElement = $(
-          '<div id="chatbot-loading" class="chatbot-loading"></div>'
-        );
-        const spinnerElement = $('<div class="chatbot-loading-spinner"></div>');
-        const textElement = $(
-          '<div class="chatbot-loading-text">Initializing chat...</div>'
-        );
-
-        loadingElement.append(spinnerElement, textElement);
-        chatbotBox.append(loadingElement);
-      } else {
-        $("#chatbot-loading").fadeIn(300);
+        setTimeout(() => {
+          addBotMessage("Please select one of the following options:");
+          renderButtons(mainMenuItems, handleMainMenuSelection);
+          disableChatInput(true);
+        }, 500);
       }
     }
 
-    // Hide loading animation
-    function hideLoadingAnimation() {
-      $("#chatbot-loading").fadeOut(300);
+    function handleMainMenuSelection(buttonData, index) {
+      addUserMessage(buttonData.text);
+      userData = { mainMenuItem: buttonData.text };
+
+      const selectedMenuItem = chatConfig.mainMenuItems[index];
+
+      if (
+        selectedMenuItem &&
+        selectedMenuItem.instructions &&
+        selectedMenuItem.instructions.length > 0
+      ) {
+        selectedMenuItem.instructions.sort((a, b) => a.order - b.order);
+        isInGuidedFlow = true;
+        currentInstructionPath = { mainMenuIndex: index, instructionIndex: -1 };
+        processNextInstruction();
+      } else {
+        addBotMessage(`Thank you for your interest in "${buttonData.text}".`);
+        setTimeout(resetChatFlow, 3000);
+      }
     }
 
-    // Toggle chat box with animation
+    function processNextInstruction() {
+      currentInstructionPath.instructionIndex++;
+      const { mainMenuIndex, instructionIndex } = currentInstructionPath;
+      const instructions = chatConfig.mainMenuItems[mainMenuIndex].instructions;
+
+      if (instructionIndex >= instructions.length) {
+        completeGuidedFlow(null); // Implicit end of flow
+        return;
+      }
+
+      const currentInstruction = instructions[instructionIndex];
+
+      // Explicit end of flow with return options
+      if (
+        currentInstruction.returnMenu &&
+        currentInstruction.returnMenu.length > 0
+      ) {
+        completeGuidedFlow(currentInstruction.returnMenu);
+        return;
+      }
+
+      addTypingIndicator();
+
+      setTimeout(() => {
+        removeTypingIndicator();
+        addBotMessage(currentInstruction.name);
+
+        const requireInput = currentInstruction.requireUserInput.toLowerCase();
+
+        if (requireInput === "no") {
+          setTimeout(processNextInstruction, 800);
+        } else if (currentInstruction.displayAs === "button") {
+          disableChatInput(true);
+          const buttons = currentInstruction.values.map((val) => ({
+            text: val,
+            value: val,
+          }));
+          renderButtons(buttons, (buttonData) => {
+            addUserMessage(buttonData.text);
+            userData[currentInstruction.api] = buttonData.value;
+            processNextInstruction();
+          });
+        } else if (currentInstruction.displayAs === "text") {
+          enableChatInput();
+          if (
+            requireInput === "optional" &&
+            currentInstruction.values.includes("Skip")
+          ) {
+            renderButtons([{ text: "Skip", value: "Skip" }], () => {
+              addUserMessage("Skip");
+              disableChatInput(true);
+              processNextInstruction();
+            });
+          }
+        }
+      }, 1000);
+    }
+
+    function completeGuidedFlow(returnMenuOptions) {
+      isInGuidedFlow = false;
+      disableChatInput(true);
+      addTypingIndicator();
+
+      $.ajax({
+        url: `${API_BASE_URL}/${sessionId}`,
+        type: "POST",
+        contentType: "application/json",
+        data: JSON.stringify(userData),
+        success: function (response) {
+          removeTypingIndicator();
+          console.log("Guided flow data submitted successfully:", userData);
+          addBotMessage("Thank you! Your information has been submitted.");
+
+          if (returnMenuOptions && returnMenuOptions.length > 0) {
+            setTimeout(() => {
+              addBotMessage("What would you like to do next?");
+              const buttons = returnMenuOptions.map((val) => ({
+                text: val,
+                value: val,
+              }));
+              renderButtons(buttons, handleReturnMenuSelection);
+            }, 1000);
+          } else {
+            setTimeout(resetChatFlow, 4000);
+          }
+        },
+        error: function (xhr, status, error) {
+          removeTypingIndicator();
+          console.error("Error submitting form data:", error);
+          addBotMessage(
+            "I'm sorry, there was a problem submitting your information."
+          );
+          setTimeout(resetChatFlow, 4000);
+        },
+      });
+    }
+
+    function handleReturnMenuSelection(buttonData) {
+      addUserMessage(buttonData.text);
+
+      if (buttonData.value === "Main Menu") {
+        resetChatFlow();
+      } else {
+        const targetMenuIndex = chatConfig.mainMenuItems.findIndex(
+          (item) => item.name === buttonData.value
+        );
+        if (targetMenuIndex > -1) {
+          handleMainMenuSelection(buttonData, targetMenuIndex);
+        } else {
+          addBotMessage(
+            "Sorry, I can't find that option. Returning to the main menu."
+          );
+          setTimeout(resetChatFlow, 3000);
+        }
+      }
+    }
+
+    function resetChatFlow() {
+      addBotMessage("How else can I help you today?");
+      handleConfigResponse(chatConfig);
+    }
+
+    // --- Core Chat Functions ---
+
     chatbotButton.on("click", function () {
       isChatOpen = !isChatOpen;
+      chatbotButton.removeClass("pulse-attention");
 
       if (isChatOpen) {
-        // Button animation
         chatbotButton.addClass("active");
-
-        // Show chatbox with animation
         chatbotBox.css("display", "flex").hide().fadeIn(300);
 
         if (!sessionId) {
-          // Initialize session when chat is opened for the first time
           initializeSession();
         }
-
-        // Focus on input after animation completes
         setTimeout(() => {
           chatbotInput.focus();
         }, 400);
-
-        // Mark that user has interacted
         hasUserInteracted = true;
       } else {
-        // Button animation
         chatbotButton.removeClass("active");
-
-        // Hide chatbox with animation
         chatbotBox.fadeOut(300);
       }
     });
 
-    // Pulse animation for button if no interaction
-    if (!hasUserInteracted) {
-      setTimeout(() => {
-        if (!hasUserInteracted) {
-          chatbotButton.addClass("pulse-attention");
-          setTimeout(() => {
-            chatbotButton.removeClass("pulse-attention");
-          }, 2000);
-        }
-      }, 5000);
-    }
+    setTimeout(() => {
+      if (!isChatOpen && !hasUserInteracted) {
+        chatbotButton.addClass("pulse-attention");
+      }
+    }, 8000);
 
-    // Close chat box
     chatbotClose.on("click", function (e) {
       e.stopPropagation();
-
-      if (sessionId) {
-        // End the session when closing chat
-        $.ajax({
-          url: `${API_BASE_URL}/${sessionId}`,
-          type: "DELETE",
-          success: function () {
-            console.log("Session terminated successfully");
-          },
-          error: function (xhr, status, error) {
-            console.error("Error terminating session:", error);
-          },
-        });
-      }
-
-      // Hide with animation
       chatbotBox.fadeOut(300);
       chatbotButton.removeClass("active");
       isChatOpen = false;
     });
 
-    // Send message on button click
     chatbotSend.on("click", sendMessage);
-
-    // Send message on Enter key
     chatbotInput.on("keypress", function (e) {
       if (e.which === 13) {
         sendMessage();
@@ -236,94 +314,66 @@
       }
     });
 
-    // Input animation
-    chatbotInput
-      .on("focus", function () {
-        $(this).parent().addClass("focused");
-      })
-      .on("blur", function () {
-        $(this).parent().removeClass("focused");
-      });
-
     function sendMessage() {
       const message = chatbotInput.val().trim();
-      if (message !== "" && !isWaitingForResponse) {
+      if (message === "" || isWaitingForResponse) return;
+
+      if (isInGuidedFlow) {
+        const { mainMenuIndex, instructionIndex } = currentInstructionPath;
+        if (!chatConfig || !chatConfig.mainMenuItems[mainMenuIndex]) return;
+        const currentInstruction =
+          chatConfig.mainMenuItems[mainMenuIndex].instructions[
+            instructionIndex
+          ];
+
+        addUserMessage(message);
+        chatbotInput.val("");
+        $(".chatbot-button-container").remove();
+
+        if (currentInstruction.api) {
+          userData[currentInstruction.api] = message;
+        }
+
+        disableChatInput(true);
+        processNextInstruction();
+      } else {
         addUserMessage(message);
         chatbotInput.val("");
         isWaitingForResponse = true;
         addTypingIndicator();
-
-        // If we don't have a session yet, initialize one
-        if (!sessionId) {
-          if (!isInitializing) {
-            initializeSession();
-          }
-          setTimeout(function () {
-            // Retry sending the message after a delay
-            sendToAgent(message);
-          }, 2000);
-        } else {
-          sendToAgent(message);
-        }
+        sendToAgent(message);
       }
     }
 
     function sendToAgent(message) {
       if (!sessionId) {
         removeTypingIndicator();
-        addBotMessage(
-          "I'm still connecting to the service. Please try again in a moment."
-        );
+        addBotMessage("I'm still connecting. Please try again in a moment.");
         isWaitingForResponse = false;
+        if (!isInitializing) initializeSession();
         return;
       }
-
       $.ajax({
         url: `${API_BASE_URL}/${sessionId}`,
         type: "POST",
         contentType: "application/json",
-        data: JSON.stringify({
-          text: message,
-        }),
+        data: JSON.stringify({ text: message }),
         success: function (response) {
           removeTypingIndicator();
-
-          console.log(response);
-
-          // Process the response
           if (response.messages && response.messages.length > 0) {
             const botMessage =
-              response.messages[0].message ||
-              "I'm sorry, I couldn't process that request.";
-
-            // Simulate typing delay for more natural conversation flow
-            setTimeout(() => {
-              addBotMessage(botMessage);
-            }, 500);
-
-            console.log("Response data:", response);
-
-            // Handle any results if needed
-            if (
-              response.messages[0].result &&
-              response.messages[0].result.length > 0
-            ) {
-              // Process specific result types here if needed
-              console.log("Result data:", response.messages[0].result);
-            }
+              response.messages[0].message || "Sorry, I couldn't process that.";
+            addBotMessage(botMessage);
           } else {
             addBotMessage(
               "I received your message but couldn't generate a response."
             );
           }
-
           isWaitingForResponse = false;
         },
         error: function (xhr, status, error) {
           removeTypingIndicator();
           console.error("API Error:", error);
-
-          // Handle session expiration
           if (xhr.status === 401 || xhr.status === 404) {
             sessionId = null;
             addBotMessage("My connection expired. Reconnecting...");
@@ -331,17 +381,31 @@
           } else {
             addBotMessage("I encountered an error. Please try again later.");
           }
-
           isWaitingForResponse = false;
         },
       });
     }
 
+    // --- UI and Helper Functions ---
+    function showLoadingAnimation() {
+      if ($("#chatbot-loading").length === 0) {
+        const loadingElement = $(
+          '<div id="chatbot-loading" class="chatbot-loading"><div class="chatbot-loading-spinner"></div><div class="chatbot-loading-text">Initializing chat...</div></div>'
+        );
+        chatbotBox.append(loadingElement);
+      } else {
+        $("#chatbot-loading").fadeIn(300);
+      }
+    }
+
+    function hideLoadingAnimation() {
+      $("#chatbot-loading").fadeOut(300);
+    }
+
     function addTypingIndicator() {
+      if ($("#chatbot-typing").length > 0) return;
       const typingElement = $(
-        '<div id="chatbot-typing" class="chatbot-message chatbot-message-bot"></div>'
-      ).html(
-        '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>'
+        '<div id="chatbot-typing" class="chatbot-message chatbot-message-bot"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>'
       );
       chatbotMessages.append(typingElement);
       scrollToBottom();
@@ -358,21 +422,17 @@
         hour: "2-digit",
         minute: "2-digit",
       });
-
       const messageElement = $(
         '<div class="chatbot-message chatbot-message-user"></div>'
       ).text(message);
-
       const timestampElement = $('<div class="chatbot-timestamp"></div>').text(
         timestamp
       );
-
       messageElement.append(timestampElement);
       messageElement
         .css("opacity", "0")
         .appendTo(chatbotMessages)
         .animate({ opacity: 1 }, 300);
-
       scrollToBottom();
     }
 
@@ -381,196 +441,93 @@
         hour: "2-digit",
         minute: "2-digit",
       });
-
-      // Create message element
       const messageElement = $(
         '<div class="chatbot-message chatbot-message-bot"></div>'
       );
-
-      let showLeadForm = false;
-      let cleanedMessage = message;
-
-      // Check for the lead tag
-      if (message.includes("---TAKELEAD---")) {
-        showLeadForm = true;
-        cleanedMessage = message.replace("---TAKELEAD---", "").trim();
-      }
-
-      // Support HTML content in messages
-      if (cleanedMessage.includes("<") && cleanedMessage.includes(">")) {
-        messageElement.html(cleanedMessage);
+      if (message.includes("<") && message.includes(">")) {
+        messageElement.html(message);
       } else {
-        // Only add text content if the cleaned message is not empty
-        if (cleanedMessage) {
-          messageElement.text(cleanedMessage);
-        } else if (!showLeadForm) {
-          // If the message was ONLY the tag and we are not showing the form (edge case)
-          // Avoid adding an empty message bubble
-          return;
-        }
+        messageElement.text(message);
       }
-
-      // Only append the message element if it has content or if we need to show the form
-      if (cleanedMessage || showLeadForm) {
-        const timestampElement = $(
-          '<div class="chatbot-timestamp"></div>'
-        ).text(timestamp);
-        messageElement.append(timestampElement);
-
-        // Add with fade-in animation
-        messageElement
-          .css("opacity", "0")
-          .appendTo(chatbotMessages)
-          .animate({ opacity: 1 }, 300);
-      }
-
-      // If the lead form should be shown
-      if (showLeadForm) {
-        const formId = `lead-form-${Date.now()}`; // Unique ID for the form
-        const formHtml = `
-            <div id="${formId}" class="chatbot-lead-form">
-                <p style="margin: 0 0 8px 0; font-weight: bold;">Please provide your details:</p>
-                <input type="text" name="firstname" placeholder="First Name" required>
-                <input type="text" name="lastname" placeholder="Last Name" required>
-                <input type="email" name="email" placeholder="Email" required>
-                <button type="submit">Submit</button>
-            </div>
-        `;
-        // Append the form right after the message element if it exists, otherwise append to messages container
-        const formElement = $(formHtml).css("opacity", "0");
-        if (messageElement.parent().length) {
-          // Check if messageElement was appended
-          messageElement.after(formElement);
-        } else {
-          chatbotMessages.append(formElement);
-        }
-        formElement.animate({ opacity: 1 }, 300);
-
-        // Add submit handler
-        $(`#${formId}`).on("submit", function (e) {
-          e.preventDefault();
-          // Add submission animation/message
-          const thankYouMessage = $(
-            '<div class="chatbot-form-submitted">Thank you! We will reach out soon. <span class="loader"></span></div>'
-          ).css("opacity", "0"); // Start hidden for fade-in
-          $(this).replaceWith(thankYouMessage);
-          thankYouMessage.animate({ opacity: 1 }, 300); // Fade in the message
-
-          // Optional: Get form data
-          // const formData = $(this).serializeArray();
-          // console.log("Lead Form Submitted:", formData);
-          // Here you would typically send the data to your server
-
-          scrollToBottom(); // Scroll after replacing form
-        });
-      }
-
+      const timestampElement = $('<div class="chatbot-timestamp"></div>').text(
+        timestamp
+      );
+      messageElement.append(timestampElement);
+      messageElement
+        .css("opacity", "0")
+        .appendTo(chatbotMessages)
+        .animate({ opacity: 1 }, 300);
       scrollToBottom();
     }
 
-    function scrollToBottom() {
-      chatbotMessages.stop().animate(
-        {
-          scrollTop: chatbotMessages[0].scrollHeight,
-        },
-        300
-      );
+    function renderButtons(buttons, callback) {
+      const buttonContainer = $('<div class="chatbot-button-container"></div>');
+      buttons.forEach((buttonData, index) => {
+        const button = $('<button class="chatbot-choice-button"></button>')
+          .text(buttonData.text)
+          .on("click", function () {
+            $(this)
+              .parent()
+              .find(".chatbot-choice-button")
+              .prop("disabled", true)
+              .addClass("disabled");
+            $(this)
+              .parent()
+              .fadeOut(300, function () {
+                $(this).remove();
+              });
+            callback(buttonData, index);
+          });
+        buttonContainer.append(button);
+      });
+      buttonContainer
+        .css("opacity", "0")
+        .appendTo(chatbotMessages)
+        .animate({ opacity: 1 }, 300);
+      scrollToBottom();
     }
 
-    // Add some additional CSS for animations
+    function disableChatInput(hide = false) {
+      chatbotInput.prop("disabled", true);
+      chatbotSend.prop("disabled", true);
+      chatbotInputContainer.addClass("disabled");
+      if (hide) {
+        chatbotInputContainer.css("visibility", "hidden");
+      }
+    }
+
+    function enableChatInput() {
+      chatbotInputContainer.css("visibility", "visible");
+      chatbotInput.prop("disabled", false);
+      chatbotSend.prop("disabled", false);
+      chatbotInputContainer.removeClass("disabled");
+      chatbotInput.focus();
+    }
+
+    function scrollToBottom() {
+      chatbotMessages
+        .stop()
+        .animate({ scrollTop: chatbotMessages[0].scrollHeight }, 300);
+    }
+
     $("<style>")
       .prop("type", "text/css")
       .html(
         `
-        #circle-chatbot-button.active {
-          transform: scale(0.9);
-          box-shadow: 0 3px 10px rgba(37, 99, 235, 0.3);
-        }
-        
-        #circle-chatbot-button.pulse-attention {
-          animation: pulse-ring 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) forwards;
-        }
-        
+        #circle-chatbot-button.active { transform: scale(0.9); box-shadow: 0 3px 10px rgba(37, 99, 235, 0.3); }
+        #circle-chatbot-button.pulse-attention { animation: pulse-ring 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) forwards; }
         @keyframes pulse-ring {
-          0% {
-            transform: scale(1);
-            box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.7);
-          }
-          50% {
-            transform: scale(1.1);
-            box-shadow: 0 0 0 10px rgba(37, 99, 235, 0);
-          }
-          100% {
-            transform: scale(1);
-            box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
-          }
+          0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.7); }
+          50% { transform: scale(1.1); box-shadow: 0 0 0 10px rgba(37, 99, 235, 0); }
+          100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
         }
-        
-        #circle-chatbot-input-container.focused {
-          border-color: var(--primary-color);
-          box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-        }
-
-        /* Lead Form Styles */
-        .chatbot-lead-form {
-            background-color: #f0f0f0;
-            padding: 15px;
-            margin-top: 8px;
-            border-radius: 8px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            border: 1px solid #e0e0e0;
-        }
-        .chatbot-lead-form input {
-            padding: 10px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            font-size: 0.9em;
-        }
-        .chatbot-lead-form button {
-            padding: 10px 15px;
-            background-color: var(--primary-color, #2563eb); /* Use existing primary color or default */
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: background-color 0.2s;
-            font-weight: bold;
-        }
-        .chatbot-lead-form button:hover {
-            background-color: var(--primary-hover-color, #1d4ed8); /* Darker shade for hover */
-        }
-        .chatbot-form-submitted {
-            background-color: #e6f7e9; /* Light green background */
-            color: #155724; /* Dark green text */
-            padding: 15px;
-            margin-top: 8px;
-            border-radius: 8px;
-            text-align: center;
-            font-style: italic;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            border: 1px solid #c3e6cb; /* Green border */
-        }
-        /* Simple CSS Loader */
-        .loader {
-            border: 3px solid #f3f3f3; /* Light grey */
-            border-top: 3px solid var(--primary-color, #2563eb); /* Blue */
-            border-radius: 50%;
-            width: 16px;
-            height: 16px;
-            animation: spin 1s linear infinite;
-            display: inline-block;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-      `
+        #circle-chatbot-input-container.disabled { background-color: #f0f2f5; }
+        #circle-chatbot-input-container #circle-chatbot-input:disabled { background: transparent; }
+        .chatbot-button-container { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 0 45px; }
+        .chatbot-choice-button { padding: 8px 16px; background-color: #fff; color: var(--primary-color, #2563eb); border: 1px solid var(--primary-color, #2563eb); border-radius: 20px; cursor: pointer; transition: all 0.2s; font-size: 0.9em; font-weight: 500; }
+        .chatbot-choice-button:hover { background-color: var(--primary-color, #2563eb); color: #fff; }
+        .chatbot-choice-button:disabled, .chatbot-choice-button.disabled { background-color: #e0e0e0; color: #9e9e9e; border-color: #e0e0e0; cursor: not-allowed; }
+    `
       )
       .appendTo("head");
   });
