@@ -24,7 +24,46 @@
 
     // API Configuration
     const API_BASE_URL =
-      "https://ex1748335242676.my.salesforce-sites.com/services/apexrest/agentsupport";
+      "https://ex1748335242676.my.salesforce.com/services/apexrest/api/v2/chatbot";
+    const AUTH_URL =
+      "https://ex1748335242676.my.salesforce.com/services/oauth2/token";
+    const CLIENT_ID =
+      "3MVG9Rr0EZ2YOVMaiURB_CKR_UY4ajp51uodrx5q3kicEMpK3Tv1PwR22UxhCgIFe_yJOj1a5fboyFzQQHG2g";
+    const CLIENT_SECRET =
+      "E98350F66087134F18CF9CCF938ADB60639DFB034C7A0F57755BE63EE177D2D6";
+
+    // Token Management
+    let accessToken = null;
+    let tokenExpiry = null;
+
+    // Get Access Token
+    function getAccessToken() {
+      return new Promise((resolve, reject) => {
+        if (accessToken && tokenExpiry && new Date().getTime() < tokenExpiry) {
+          resolve(accessToken);
+          return;
+        }
+        $.ajax({
+          url: AUTH_URL,
+          type: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          data: {
+            grant_type: "client_credentials",
+            client_id: CLIENT_ID,
+            client_secret: CLIENT_SECRET,
+          },
+          success: function (response) {
+            accessToken = response.access_token;
+            tokenExpiry = new Date().getTime() + 50 * 60 * 1000;
+            resolve(accessToken);
+          },
+          error: function (xhr, status, error) {
+            console.error("Token Request Error:", error);
+            reject(error);
+          },
+        });
+      });
+    }
 
     // --- Chat State Management ---
     let sessionId = null;
@@ -38,113 +77,140 @@
     let currentInstructionPath = { mainMenuIndex: null, instructionIndex: -1 };
     let userData = {};
     let isInGuidedFlow = false;
+    let isProductSearchActive = false;
 
-    // Initialize session
+    // Initialize session with authentication
     function initializeSession() {
       if (isInitializing) return;
-
       isInitializing = true;
       showLoadingAnimation();
-
-      $.ajax({
-        url: API_BASE_URL,
-        type: "GET",
-        contentType: "application/json",
-        success: function (response) {
-          console.log("Session Creation Response:", response);
-          sessionId = response.sessionId;
-          console.log("Session created:", sessionId);
-
+      getAccessToken()
+        .then(() => {
+          initiateConfiguredChat();
           hideLoadingAnimation();
           isInitializing = false;
-
-          if (response.messages && response.messages.length > 0) {
-            const welcomeMessage =
-              response.messages[0].message || "Welcome to our chat service!";
-            addTypingIndicator();
-            setTimeout(() => {
-              removeTypingIndicator();
-              addBotMessage(welcomeMessage);
-              // Initiate the guided flow
-              initiateConfiguredChat();
-            }, 1000);
-          }
-        },
-        error: function (xhr, status, error) {
-          console.error("Session Creation Error:", error);
+        })
+        .catch((error) => {
+          console.error("Authentication Error:", error);
           hideLoadingAnimation();
           isInitializing = false;
           addBotMessage(
-            "I'm having trouble initializing the chat service. Please try again later."
+            "I'm having trouble authenticating. Please try again later."
           );
-        },
-      });
+        });
     }
 
     // --- Guided Flow Logic ---
 
     function initiateConfiguredChat() {
       addTypingIndicator();
-      // Silently send a message to get the JSON configuration
-      $.ajax({
-        url: `${API_BASE_URL}/${sessionId}`,
-        type: "POST",
-        contentType: "application/json",
-        data: JSON.stringify({ text: "initiate chat session" }),
-        success: function (response) {
+      getAccessToken()
+        .then((token) => {
+          fetch(`${API_BASE_URL}/qeihen`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ selectedMenu: "INIT" }),
+          })
+            .then((response) => {
+              if (!response.ok)
+                throw new Error(`HTTP error! status: ${response.status}`);
+              return response.json();
+            })
+            .then((response) => {
+              removeTypingIndicator();
+              handleConfigResponse(response);
+            })
+            .catch((error) => {
+              removeTypingIndicator();
+              console.error("Error fetching chat config:", error);
+              addBotMessage(
+                "Sorry, I'm having trouble loading our conversation options."
+              );
+            });
+        })
+        .catch((error) => {
           removeTypingIndicator();
-          console.log("Chat Config Received:", response);
-          handleConfigResponse(response);
-        },
-        error: function (xhr, status, error) {
-          removeTypingIndicator();
-          console.error("Error fetching chat config:", error);
+          console.error("Authentication Error:", error);
           addBotMessage(
-            "Sorry, I'm having trouble loading our conversation options."
+            "I'm having trouble authenticating. Please try again later."
           );
-        },
-      });
+        });
     }
 
-    function handleConfigResponse(config) {
-      chatConfig = config;
+    function handleConfigResponse(config, isReset = false) {
+      try {
+        chatConfig = JSON.parse(config.messageResponse);
+      } catch (e) {
+        console.error("Failed to parse chat config JSON:", e);
+        addBotMessage(
+          "Sorry, there was an error loading the chat options. The format is invalid."
+        );
+        return;
+      }
       userData = {};
       currentInstructionPath = { mainMenuIndex: null, instructionIndex: -1 };
       isInGuidedFlow = false;
+      isProductSearchActive = false;
 
+      if (!isReset && chatConfig && chatConfig.welcomeTexts) {
+        chatConfig.welcomeTexts.sort((a, b) => a.order - b.order);
+        const welcomeMessages = chatConfig.welcomeTexts.map(
+          (item) => item.name
+        );
+        welcomeMessages.forEach((msg) => addBotMessage(msg));
+      }
       if (chatConfig && chatConfig.mainMenuItems) {
         chatConfig.mainMenuItems.sort((a, b) => a.order - b.order);
         const mainMenuItems = chatConfig.mainMenuItems.map((item) => ({
           text: item.name,
           value: item.name,
         }));
-
         setTimeout(() => {
-          addBotMessage("Please select one of the following options:");
           renderButtons(mainMenuItems, handleMainMenuSelection);
           disableChatInput(true);
         }, 500);
       }
     }
 
+    // MODIFIED: Added handler for "About Birla Carbon"
     function handleMainMenuSelection(buttonData, index) {
       addUserMessage(buttonData.text);
-      userData = { mainMenuItem: buttonData.text };
 
-      const selectedMenuItem = chatConfig.mainMenuItems[index];
-
-      if (
-        selectedMenuItem &&
-        selectedMenuItem.instructions &&
-        selectedMenuItem.instructions.length > 0
-      ) {
-        selectedMenuItem.instructions.sort((a, b) => a.order - b.order);
-        isInGuidedFlow = true;
-        currentInstructionPath = { mainMenuIndex: index, instructionIndex: -1 };
-        processNextInstruction();
+      if (buttonData.text === "Our products & solutions") {
+        isProductSearchActive = true;
+        isInGuidedFlow = false;
+        addBotMessage(
+          "Please enter the product or solution you are looking for."
+        );
+        enableChatInput();
+      } else if (buttonData.text === "About Birla Carbon") {
+        // NEW: Immediately fetch info for "About Birla Carbon"
+        isProductSearchActive = false;
+        isInGuidedFlow = false;
+        fetchAboutBirlaCarbon();
       } else {
-        addBotMessage(`Thank you for your interest in "${buttonData.text}".`);
-        setTimeout(resetChatFlow, 3000);
+        const selectedMenuItem = chatConfig.mainMenuItems[index];
+        if (
+          selectedMenuItem &&
+          selectedMenuItem.instructions &&
+          selectedMenuItem.instructions.length > 0
+        ) {
+          selectedMenuItem.instructions.sort((a, b) => a.order - b.order);
+          isInGuidedFlow = true;
+          isProductSearchActive = false;
+          userData = { mainMenuItems: buttonData.text };
+          currentInstructionPath = {
+            mainMenuIndex: index,
+            instructionIndex: -1,
+          };
+          processNextInstruction();
+        } else {
+          addBotMessage(`Thank you for your interest in "${buttonData.text}".`);
+          setTimeout(resetChatFlow, 3000);
+        }
       }
     }
 
@@ -154,13 +220,10 @@
       const instructions = chatConfig.mainMenuItems[mainMenuIndex].instructions;
 
       if (instructionIndex >= instructions.length) {
-        completeGuidedFlow(null); // Implicit end of flow
+        completeGuidedFlow(null);
         return;
       }
-
       const currentInstruction = instructions[instructionIndex];
-
-      // Explicit end of flow with return options
       if (
         currentInstruction.returnMenu &&
         currentInstruction.returnMenu.length > 0
@@ -168,16 +231,11 @@
         completeGuidedFlow(currentInstruction.returnMenu);
         return;
       }
-
       addTypingIndicator();
-
       setTimeout(() => {
         removeTypingIndicator();
         addBotMessage(currentInstruction.name);
-
-        const requireInput = currentInstruction.requireUserInput.toLowerCase();
-
-        if (requireInput === "no") {
+        if (currentInstruction.requireUserInput.toLowerCase() === "no") {
           setTimeout(processNextInstruction, 800);
         } else if (currentInstruction.displayAs === "button") {
           disableChatInput(true);
@@ -193,7 +251,7 @@
         } else if (currentInstruction.displayAs === "text") {
           enableChatInput();
           if (
-            requireInput === "optional" &&
+            currentInstruction.requireUserInput.toLowerCase() === "optional" &&
             currentInstruction.values.includes("Skip")
           ) {
             renderButtons([{ text: "Skip", value: "Skip" }], () => {
@@ -210,44 +268,64 @@
       isInGuidedFlow = false;
       disableChatInput(true);
       addTypingIndicator();
-
-      $.ajax({
-        url: `${API_BASE_URL}/${sessionId}`,
-        type: "POST",
-        contentType: "application/json",
-        data: JSON.stringify(userData),
-        success: function (response) {
+      const selectedMenuName = userData.mainMenuItems;
+      const requestData = { ...userData };
+      delete requestData.mainMenuItems;
+      const finalPayload = {
+        selectedMenu: selectedMenuName,
+        requestDataType: "json",
+        requestText: requestData,
+      };
+      getAccessToken()
+        .then((token) => {
+          $.ajax({
+            url: `${API_BASE_URL}/chatbot`,
+            type: "POST",
+            contentType: "application/json",
+            headers: { Authorization: `Bearer ${token}` },
+            data: JSON.stringify(finalPayload),
+            success: function (response) {
+              removeTypingIndicator();
+              addBotMessage(
+                response && response.messageResponse
+                  ? "Thank you! Your request has been received. Our team will contact you shortly."
+                  : "Thank you! Your information has been submitted."
+              );
+              if (returnMenuOptions && returnMenuOptions.length > 0) {
+                setTimeout(() => {
+                  addBotMessage("What would you like to do next?");
+                  const buttons = returnMenuOptions.map((val) => ({
+                    text: val,
+                    value: val,
+                  }));
+                  renderButtons(buttons, handleReturnMenuSelection);
+                }, 1000);
+              } else {
+                setTimeout(resetChatFlow, 4000);
+              }
+            },
+            error: function (xhr, status, error) {
+              removeTypingIndicator();
+              console.error("Error submitting form data:", error);
+              addBotMessage(
+                "I'm sorry, there was a problem submitting your information."
+              );
+              setTimeout(resetChatFlow, 4000);
+            },
+          });
+        })
+        .catch((error) => {
           removeTypingIndicator();
-          console.log("Guided flow data submitted successfully:", userData);
-          addBotMessage("Thank you! Your information has been submitted.");
-
-          if (returnMenuOptions && returnMenuOptions.length > 0) {
-            setTimeout(() => {
-              addBotMessage("What would you like to do next?");
-              const buttons = returnMenuOptions.map((val) => ({
-                text: val,
-                value: val,
-              }));
-              renderButtons(buttons, handleReturnMenuSelection);
-            }, 1000);
-          } else {
-            setTimeout(resetChatFlow, 4000);
-          }
-        },
-        error: function (xhr, status, error) {
-          removeTypingIndicator();
-          console.error("Error submitting form data:", error);
+          console.error("Authentication Error:", error);
           addBotMessage(
-            "I'm sorry, there was a problem submitting your information."
+            "I'm having trouble authenticating your request. Please try again."
           );
           setTimeout(resetChatFlow, 4000);
-        },
-      });
+        });
     }
 
     function handleReturnMenuSelection(buttonData) {
       addUserMessage(buttonData.text);
-
       if (buttonData.value === "Main Menu") {
         resetChatFlow();
       } else {
@@ -267,7 +345,12 @@
 
     function resetChatFlow() {
       addBotMessage("How else can I help you today?");
-      handleConfigResponse(chatConfig);
+      if (chatConfig && chatConfig.mainMenuItems) {
+        handleConfigResponse(
+          { messageResponse: JSON.stringify(chatConfig) },
+          true
+        );
+      }
     }
 
     // --- Core Chat Functions ---
@@ -275,17 +358,11 @@
     chatbotButton.on("click", function () {
       isChatOpen = !isChatOpen;
       chatbotButton.removeClass("pulse-attention");
-
       if (isChatOpen) {
         chatbotButton.addClass("active");
         chatbotBox.css("display", "flex").hide().fadeIn(300);
-
-        if (!sessionId) {
-          initializeSession();
-        }
-        setTimeout(() => {
-          chatbotInput.focus();
-        }, 400);
+        if (!sessionId) initializeSession();
+        setTimeout(() => chatbotInput.focus(), 400);
         hasUserInteracted = true;
       } else {
         chatbotButton.removeClass("active");
@@ -294,9 +371,8 @@
     });
 
     setTimeout(() => {
-      if (!isChatOpen && !hasUserInteracted) {
+      if (!isChatOpen && !hasUserInteracted)
         chatbotButton.addClass("pulse-attention");
-      }
     }, 8000);
 
     chatbotClose.on("click", function (e) {
@@ -318,6 +394,15 @@
       const message = chatbotInput.val().trim();
       if (message === "" || isWaitingForResponse) return;
 
+      if (isProductSearchActive) {
+        addUserMessage(message);
+        chatbotInput.val("");
+        isWaitingForResponse = true;
+        addTypingIndicator();
+        sendProductSearchQuery(message);
+        return;
+      }
+
       if (isInGuidedFlow) {
         const { mainMenuIndex, instructionIndex } = currentInstructionPath;
         if (!chatConfig || !chatConfig.mainMenuItems[mainMenuIndex]) return;
@@ -325,15 +410,10 @@
           chatConfig.mainMenuItems[mainMenuIndex].instructions[
             instructionIndex
           ];
-
         addUserMessage(message);
         chatbotInput.val("");
         $(".chatbot-button-container").remove();
-
-        if (currentInstruction.api) {
-          userData[currentInstruction.api] = message;
-        }
-
+        if (currentInstruction.api) userData[currentInstruction.api] = message;
         disableChatInput(true);
         processNextInstruction();
       } else {
@@ -345,6 +425,133 @@
       }
     }
 
+    // NEW: Function to get "About Birla Carbon" info
+    function fetchAboutBirlaCarbon() {
+      addTypingIndicator();
+      disableChatInput(true);
+      const payload = {
+        selectedMenu: "About Birla Carbon",
+        requestDataType: "text",
+      };
+
+      getAccessToken()
+        .then((token) => {
+          $.ajax({
+            url: `${API_BASE_URL}/chatbot`,
+            type: "POST",
+            contentType: "application/json",
+            headers: { Authorization: `Bearer ${token}` },
+            data: JSON.stringify(payload),
+            success: function (response) {
+              removeTypingIndicator();
+              if (response && response.messageResponse) {
+                // Sanitize, then format the text for display
+                const rawText = response.messageResponse;
+                // 1. Escape any HTML characters in the raw text to prevent XSS
+                const escapedText = $("<div>").text(rawText).html();
+                // 2. Replace newline characters with <br> for line breaks
+                let formattedText = escapedText.replace(/\n/g, "<br>");
+                // 3. Find URLs and convert them to clickable links
+                const urlRegex = /(https?:\/\/[^\s]+)/g;
+                formattedText = formattedText.replace(
+                  urlRegex,
+                  '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+                );
+
+                addBotMessage(formattedText);
+              } else {
+                addBotMessage(
+                  "I couldn't retrieve the information at the moment."
+                );
+              }
+              setTimeout(resetChatFlow, 5000); // Give user time to read before resetting
+            },
+            error: function (xhr, status, error) {
+              removeTypingIndicator();
+              console.error("API Error on 'About' fetch:", error);
+              addBotMessage(
+                "Sorry, I encountered an error while fetching that information."
+              );
+              setTimeout(resetChatFlow, 4000);
+            },
+          });
+        })
+        .catch((error) => {
+          removeTypingIndicator();
+          console.error("Authentication Error:", error);
+          addBotMessage(
+            "I'm having trouble with authentication. Please try again."
+          );
+          setTimeout(resetChatFlow, 4000);
+        });
+    }
+
+    function sendProductSearchQuery(query) {
+      isProductSearchActive = false;
+      disableChatInput(true);
+      const payload = {
+        selectedMenu: "Our products & solutions",
+        requestDataType: "text",
+        requestText: query,
+      };
+      getAccessToken()
+        .then((token) => {
+          $.ajax({
+            url: `${API_BASE_URL}`,
+            type: "POST",
+            contentType: "application/json",
+            headers: { Authorization: `Bearer ${token}` },
+            data: JSON.stringify(payload),
+            success: function (response) {
+              removeTypingIndicator();
+              isWaitingForResponse = false;
+              try {
+                const results = JSON.parse(response.messageResponse);
+                if (Array.isArray(results) && results.length > 0) {
+                  let htmlResponse = "Here are the results I found:<ul>";
+                  results.forEach((item) => {
+                    if (item.title && item.url) {
+                      const sanitizedTitle = $("<div>").text(item.title).html();
+                      htmlResponse += `<li><a href="${item.url}" target="_blank" rel="noopener noreferrer">${sanitizedTitle}</a></li>`;
+                    }
+                  });
+                  htmlResponse += "</ul>";
+                  addBotMessage(htmlResponse);
+                } else {
+                  addBotMessage(
+                    "Sorry, I couldn't find any results for that query."
+                  );
+                }
+              } catch (e) {
+                console.error("Error parsing search results:", e);
+                addBotMessage(
+                  "I received a response, but had trouble reading the results."
+                );
+              }
+              setTimeout(resetChatFlow, 4000);
+            },
+            error: function (xhr, status, error) {
+              removeTypingIndicator();
+              isWaitingForResponse = false;
+              console.error("API Error on product search:", error);
+              addBotMessage(
+                "I encountered an error while searching. Please try again."
+              );
+              setTimeout(resetChatFlow, 4000);
+            },
+          });
+        })
+        .catch((error) => {
+          removeTypingIndicator();
+          isWaitingForResponse = false;
+          console.error("Authentication Error:", error);
+          addBotMessage(
+            "I'm having trouble with authentication. Please try again."
+          );
+          setTimeout(resetChatFlow, 4000);
+        });
+    }
+
     function sendToAgent(message) {
       if (!sessionId) {
         removeTypingIndicator();
@@ -353,37 +560,50 @@
         if (!isInitializing) initializeSession();
         return;
       }
-      $.ajax({
-        url: `${API_BASE_URL}/${sessionId}`,
-        type: "POST",
-        contentType: "application/json",
-        data: JSON.stringify({ text: message }),
-        success: function (response) {
+      getAccessToken()
+        .then((token) => {
+          $.ajax({
+            url: `${API_BASE_URL}/${sessionId}`,
+            type: "POST",
+            contentType: "application/json",
+            headers: { Authorization: `Bearer ${token}` },
+            data: JSON.stringify({ text: message }),
+            success: function (response) {
+              removeTypingIndicator();
+              if (response.messages && response.messages.length > 0)
+                addBotMessage(
+                  response.messages[0].message ||
+                    "Sorry, I couldn't process that."
+                );
+              else
+                addBotMessage(
+                  "I received your message but couldn't generate a response."
+                );
+              isWaitingForResponse = false;
+            },
+            error: function (xhr, status, error) {
+              removeTypingIndicator();
+              console.error("API Error:", error);
+              if (xhr.status === 401 || xhr.status === 404) {
+                sessionId = null;
+                addBotMessage("My connection expired. Reconnecting...");
+                initializeSession();
+              } else
+                addBotMessage(
+                  "I encountered an error. Please try again later."
+                );
+              isWaitingForResponse = false;
+            },
+          });
+        })
+        .catch((error) => {
           removeTypingIndicator();
-          if (response.messages && response.messages.length > 0) {
-            const botMessage =
-              response.messages[0].message || "Sorry, I couldn't process that.";
-            addBotMessage(botMessage);
-          } else {
-            addBotMessage(
-              "I received your message but couldn't generate a response."
-            );
-          }
+          console.error("Authentication Error:", error);
+          addBotMessage(
+            "I'm having trouble authenticating your request. Please try again."
+          );
           isWaitingForResponse = false;
-        },
-        error: function (xhr, status, error) {
-          removeTypingIndicator();
-          console.error("API Error:", error);
-          if (xhr.status === 401 || xhr.status === 404) {
-            sessionId = null;
-            addBotMessage("My connection expired. Reconnecting...");
-            initializeSession();
-          } else {
-            addBotMessage("I encountered an error. Please try again later.");
-          }
-          isWaitingForResponse = false;
-        },
-      });
+        });
     }
 
     // --- UI and Helper Functions ---
@@ -444,11 +664,9 @@
       const messageElement = $(
         '<div class="chatbot-message chatbot-message-bot"></div>'
       );
-      if (message.includes("<") && message.includes(">")) {
+      if (message.includes("<") && message.includes(">"))
         messageElement.html(message);
-      } else {
-        messageElement.text(message);
-      }
+      else messageElement.text(message);
       const timestampElement = $('<div class="chatbot-timestamp"></div>').text(
         timestamp
       );
@@ -491,9 +709,7 @@
       chatbotInput.prop("disabled", true);
       chatbotSend.prop("disabled", true);
       chatbotInputContainer.addClass("disabled");
-      if (hide) {
-        chatbotInputContainer.css("visibility", "hidden");
-      }
+      if (hide) chatbotInputContainer.css("visibility", "hidden");
     }
 
     function enableChatInput() {
@@ -527,7 +743,11 @@
         .chatbot-choice-button { padding: 8px 16px; background-color: #fff; color: var(--primary-color, #2563eb); border: 1px solid var(--primary-color, #2563eb); border-radius: 20px; cursor: pointer; transition: all 0.2s; font-size: 0.9em; font-weight: 500; }
         .chatbot-choice-button:hover { background-color: var(--primary-color, #2563eb); color: #fff; }
         .chatbot-choice-button:disabled, .chatbot-choice-button.disabled { background-color: #e0e0e0; color: #9e9e9e; border-color: #e0e0e0; cursor: not-allowed; }
-    `
+        .chatbot-message-bot ul { list-style-type: disc; padding-left: 20px; margin-top: 8px; margin-bottom: 0; }
+        .chatbot-message-bot li { margin-bottom: 8px; }
+        .chatbot-message-bot a { color: var(--primary-color, #1e40af); text-decoration: underline; }
+        .chatbot-message-bot a:hover { color: var(--primary-color-dark, #1c388a); }
+      `
       )
       .appendTo("head");
   });
