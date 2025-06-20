@@ -175,7 +175,6 @@
       }
     }
 
-    // MODIFIED: Added handler for "About Birla Carbon"
     function handleMainMenuSelection(buttonData, index) {
       addUserMessage(buttonData.text);
 
@@ -187,7 +186,6 @@
         );
         enableChatInput();
       } else if (buttonData.text === "About Birla Carbon") {
-        // NEW: Immediately fetch info for "About Birla Carbon"
         isProductSearchActive = false;
         isInGuidedFlow = false;
         fetchAboutBirlaCarbon();
@@ -390,6 +388,13 @@
       }
     });
 
+    chatbotMessages.on("click", ".description-toggle", function () {
+      const index = $(this).data("index");
+      if (index !== undefined) {
+        toggleDescription(index, this); // 'this' refers to the button element
+      }
+    });
+
     function sendMessage() {
       const message = chatbotInput.val().trim();
       if (message === "" || isWaitingForResponse) return;
@@ -425,7 +430,6 @@
       }
     }
 
-    // NEW: Function to get "About Birla Carbon" info
     function fetchAboutBirlaCarbon() {
       addTypingIndicator();
       disableChatInput(true);
@@ -445,13 +449,9 @@
             success: function (response) {
               removeTypingIndicator();
               if (response && response.messageResponse) {
-                // Sanitize, then format the text for display
                 const rawText = response.messageResponse;
-                // 1. Escape any HTML characters in the raw text to prevent XSS
                 const escapedText = $("<div>").text(rawText).html();
-                // 2. Replace newline characters with <br> for line breaks
                 let formattedText = escapedText.replace(/\n/g, "<br>");
-                // 3. Find URLs and convert them to clickable links
                 const urlRegex = /(https?:\/\/[^\s]+)/g;
                 formattedText = formattedText.replace(
                   urlRegex,
@@ -464,7 +464,7 @@
                   "I couldn't retrieve the information at the moment."
                 );
               }
-              setTimeout(resetChatFlow, 5000); // Give user time to read before resetting
+              setTimeout(resetChatFlow, 5000);
             },
             error: function (xhr, status, error) {
               removeTypingIndicator();
@@ -487,13 +487,13 @@
     }
 
     function sendProductSearchQuery(query) {
-      isProductSearchActive = false;
-      disableChatInput(true);
       const payload = {
         selectedMenu: "Our products & solutions",
         requestDataType: "text",
         requestText: query,
+        sessionId: sessionId || "INIT",
       };
+
       getAccessToken()
         .then((token) => {
           $.ajax({
@@ -505,30 +505,139 @@
             success: function (response) {
               removeTypingIndicator();
               isWaitingForResponse = false;
+
               try {
-                const results = JSON.parse(response.messageResponse);
-                if (Array.isArray(results) && results.length > 0) {
-                  let htmlResponse = "Here are the results I found:<ul>";
-                  results.forEach((item) => {
-                    if (item.title && item.url) {
-                      const sanitizedTitle = $("<div>").text(item.title).html();
-                      htmlResponse += `<li><a href="${item.url}" target="_blank" rel="noopener noreferrer">${sanitizedTitle}</a></li>`;
-                    }
+                // Parse the outer response structure
+                const outerResponse = JSON.parse(response.messageResponse);
+
+                // Update session ID if provided
+                if (outerResponse.SessionId) {
+                  sessionId = outerResponse.SessionId;
+                }
+
+                // Parse the inner response
+                const innerResponse = JSON.parse(outerResponse.Response);
+                const value = innerResponse.value;
+
+                // Try to determine if value contains product data or simple text
+                let results = null;
+                let isProductData = false;
+
+                try {
+                  // Attempt to parse value as JSON
+                  const finalParsedResponse = JSON.parse(value); // First, parse the string
+
+                  // --- FIX: Go one level deeper to get the actual product data object ---
+                  results = finalParsedResponse.value;
+
+                  // Check if it has the expected product structure
+                  if (
+                    results &&
+                    typeof results === "object" &&
+                    results.products
+                  ) {
+                    isProductData = true;
+                  }
+                } catch (parseError) {
+                  // value is not valid JSON, treat as simple text
+                  isProductData = false;
+                }
+
+                if (
+                  isProductData &&
+                  Array.isArray(results.products) &&
+                  results.products.length > 0
+                ) {
+                  // Handle product results
+                  let htmlResponse =
+                    'Here are the results I found:<div class="product-results-container">';
+
+                  results.products.forEach((item, index) => {
+                    const fullDescription =
+                      item.description || "No description available.";
+                    const descriptionWords = fullDescription.split(" ");
+                    const isLongDescription = descriptionWords.length > 30;
+
+                    let displayDescription = "";
+                    let remainingDescription = "";
+
+                    displayDescription = item.description;
+
+                    // if (isLongDescription) {
+                    //   displayDescription =
+                    //     descriptionWords.slice(0, 30).join(" ") + "...";
+                    //   remainingDescription = descriptionWords
+                    //     .slice(30)
+                    //     .join(" ");
+                    // } else {
+                    //   displayDescription = fullDescription;
+                    // }
+
+                    const sanitizedDisplayDesc = $("<div>")
+                      .text(displayDescription)
+                      .html();
+                    const sanitizedRemainingDesc = $("<div>")
+                      .text(remainingDescription)
+                      .html();
+
+                    const productUrl = item.product_picture_id_url || "#";
+                    const imageUrl = item.image_url || "#";
+
+                    htmlResponse += `
+      <div class="product-card">
+        <div class="product-description" style="display:flex; flex-direction:column;"  id="desc-full-${index}">
+          <strong style="font-size:16px; margin-right: 10px; width:100%;">${item.name}</strong>
+          <span>${item.description}</span>
+          
+        </div>
+       
+        <div class="product-links">
+          <a href="${productUrl}" target="_blank" rel="noopener noreferrer" class="product-link-btn tds-link">TDS</a>
+          <a href="${imageUrl}" target="_blank" rel="noopener noreferrer" class="product-link-btn sds-link">SDS</a>
+        </div>
+      </div>
+    `;
                   });
-                  htmlResponse += "</ul>";
+
+                  htmlResponse += "</div>";
                   addBotMessage(htmlResponse);
-                } else {
+                } else if (
+                  isProductData &&
+                  results.products &&
+                  Array.isArray(results.products) &&
+                  results.products.length === 0
+                ) {
+                  // Handle empty product results
                   addBotMessage(
-                    "Sorry, I couldn't find any results for that query."
+                    "Sorry, I couldn't find any specific product results for that query."
                   );
+                } else {
+                  // Handle simple text response (like "Could you please clarify your request?")
+                  const textMessage =
+                    typeof value === "string"
+                      ? value
+                      : "I received an unexpected response format.";
+                  addBotMessage(textMessage);
                 }
               } catch (e) {
                 console.error("Error parsing search results:", e);
+                console.error("Received response:", response.messageResponse);
                 addBotMessage(
                   "I received a response, but had trouble reading the results."
                 );
               }
-              setTimeout(resetChatFlow, 4000);
+
+              enableChatInput();
+
+              setTimeout(() => {
+                addBotMessage(
+                  "You can search for another product or return to the main menu."
+                );
+                renderButtons(
+                  [{ text: "Main Menu", value: "Main Menu" }],
+                  handleReturnMenuSelection
+                );
+              }, 1000);
             },
             error: function (xhr, status, error) {
               removeTypingIndicator();
@@ -537,6 +646,7 @@
               addBotMessage(
                 "I encountered an error while searching. Please try again."
               );
+              enableChatInput();
               setTimeout(resetChatFlow, 4000);
             },
           });
@@ -548,8 +658,28 @@
           addBotMessage(
             "I'm having trouble with authentication. Please try again."
           );
+          enableChatInput();
           setTimeout(resetChatFlow, 4000);
         });
+    }
+
+    function toggleDescription(index, buttonElement) {
+      const descriptionDiv = document.getElementById(`desc-full-${index}`);
+      if (!descriptionDiv) return;
+
+      // The hidden span is always the second child if it exists.
+      const hiddenSpan = descriptionDiv.children[1];
+      if (!hiddenSpan) return;
+
+      const isHidden = hiddenSpan.style.display === "none";
+
+      if (isHidden) {
+        hiddenSpan.style.display = "inline";
+        buttonElement.textContent = "Read Less";
+      } else {
+        hiddenSpan.style.display = "none";
+        buttonElement.textContent = "Read More";
+      }
     }
 
     function sendToAgent(message) {

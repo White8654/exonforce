@@ -7,9 +7,12 @@
   --light-text: #6b7280;
   --very-light-gray: #f9fafb;
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1),
+    0 10px 10px -5px rgba(0, 0, 0, 0.04);
   --border-radius: 12px;
   --transition-fast: all 0.2s ease;
   --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -22,7 +25,8 @@
   bottom: 25px;
   right: 25px;
   z-index: 9999;
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Oxygen, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
 }
 
 /* Chat Button */
@@ -50,7 +54,11 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: radial-gradient(circle at center, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0) 70%);
+  background: radial-gradient(
+    circle at center,
+    rgba(255, 255, 255, 0.2) 0%,
+    rgba(255, 255, 255, 0) 70%
+  );
   opacity: 0;
   transition: var(--transition-fast);
 }
@@ -312,8 +320,12 @@
 }
 
 @keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .chatbot-loading-spinner {
@@ -334,7 +346,9 @@
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Typing Indicator */
@@ -366,9 +380,15 @@
 }
 
 @keyframes typingAnimation {
-  0% { transform: scale(0); }
-  50% { transform: scale(1); }
-  100% { transform: scale(0); }
+  0% {
+    transform: scale(0);
+  }
+  50% {
+    transform: scale(1);
+  }
+  100% {
+    transform: scale(0);
+  }
 }
 
 /* Responsive styles */
@@ -379,4 +399,89 @@
     right: 0;
     bottom: 80px;
   }
+}
+
+.product-results-container {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: 5px;
+}
+
+.product-card {
+  background-color: #f7f7f7;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: box-shadow 0.3s ease;
+}
+
+.product-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.product-description {
+  color: #333;
+  line-height: 1.6;
+  font-size: 10px;
+}
+
+.description-toggle {
+  color: #007bff;
+  background: none;
+  border: none;
+  padding: 0;
+  font-weight: bold;
+  cursor: pointer;
+  text-align: left;
+  margin-top: 5px;
+}
+
+.description-toggle:hover {
+  text-decoration: underline;
+}
+
+.product-links {
+  display: flex;
+  gap: 10px;
+  margin-top: auto; /* Pushes links to the bottom of the card */
+  padding-top: 10px;
+  border-top: 1px solid #eee;
+}
+
+.product-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 5px;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 12px;
+  transition: all 0.2s ease-in-out;
+}
+
+.tds-link {
+  background-color: #e7f5ff;
+  color: #007bff;
+  border: 1px solid #b3d7ff;
+}
+
+.tds-link:hover {
+  background-color: #d0eaff;
+  color: #0056b3;
+}
+
+.sds-link {
+  background-color: #fff0e7;
+  color: #dc3545;
+  border: 1px solid #ffb3b3;
+}
+
+.sds-link:hover {
+  background-color: #ffe0d0;
+  color: #a71d2a;
 }
